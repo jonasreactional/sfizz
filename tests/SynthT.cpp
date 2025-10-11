@@ -2140,3 +2140,10 @@ TEST_CASE("[Synth] Reloading a file ignores the `set_ccN` opcodes")
 
     REQUIRE(messageList == expected);
 }
+TEST_CASE("[Synth] Load inline compressed ogg sample")
+{
+    sfz::Synth synth;
+    const auto sfzPath = fs::current_path() / "sfzfiles/test.sfz";
+    REQUIRE(synth.loadSfzFile(sfzPath));
+    REQUIRE(synth.getNumRegions() > 0);
+}
