@@ -2160,3 +2160,11 @@ TEST_CASE("[Synth] Reuse offed voices in the last case scenario for new notes")
         REQUIRE( notes == std::vector<int> { i - 1, i } );
     }
 }
+
+TEST_CASE("[Synth] Load inline compressed ogg sample")
+{
+    sfz::Synth synth;
+    const auto sfzPath = fs::current_path() / "sfzfiles/test.sfz";
+    REQUIRE(synth.loadSfzFile(sfzPath));
+    REQUIRE(synth.getNumRegions() > 0);
+}
