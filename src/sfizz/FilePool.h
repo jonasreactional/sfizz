@@ -45,6 +45,7 @@
 #include <thread>
 #include <future>
 #include <memory>
+#include <vector>
 class ThreadPool;
 
 namespace sfz {
@@ -65,6 +66,11 @@ struct FileInformation {
 };
 
 // Strict C++11 disallows member initialization if aggregate initialization is to be used...
+enum class MemoryMode {
+    Default,
+    Compressed
+};
+
 struct FileData
 {
     enum class Status { Invalid, Preloaded, Streaming, Done };
@@ -114,6 +120,8 @@ struct FileData
     std::atomic<size_t> availableFrames { 0 };
     std::atomic<int> readerCount { 0 };
     std::chrono::time_point<std::chrono::high_resolution_clock> lastViewerLeftAt;
+    MemoryMode memoryMode { MemoryMode::Default };
+    std::vector<char> compressedData;
 
     LEAK_DETECTOR(FileData);
 };
@@ -149,6 +157,10 @@ public:
 
         data->readerCount -= 1;
         data->lastViewerLeftAt = highResNow();
+        if (data->readerCount == 0 && data->memoryMode == MemoryMode::Compressed) {
+            data->fileData.reset();
+            data->availableFrames = 0;
+        }
         data = nullptr;
     }
     ~FileDataHolder()
@@ -244,7 +256,8 @@ public:
      * @param data
      * @return A handle on the file data
      */
-    FileDataHolder loadFromRam(const FileId& fileId, const std::vector<char>& data) noexcept;
+    FileDataHolder loadFromRam(const FileId& fileId, std::vector<char> data,
+        MemoryMode memoryMode = MemoryMode::Default) noexcept;
 
     /**
      * @brief Check that the sample exists. If not, try to find it in a case insensitive way.

@@ -33,6 +33,7 @@
 #include "parser/Parser.h"
 #include <absl/algorithm/container.h>
 #include <absl/memory/memory.h>
+#include <absl/strings/match.h>
 #include <absl/strings/str_replace.h>
 #include <absl/types/optional.h>
 #include <absl/types/span.h>
@@ -558,6 +559,7 @@ void Synth::Impl::handleSampleOpcodes(const std::vector<Opcode>& rawMembers)
     absl::string_view name { "" };
     bool hasData { false };
     absl::string_view sampleData;
+    MemoryMode memoryMode { MemoryMode::Default };
 
     for (const Opcode& opcode : rawMembers) {
         switch (opcode.lettersOnlyHash) {
@@ -570,6 +572,10 @@ void Synth::Impl::handleSampleOpcodes(const std::vector<Opcode>& rawMembers)
             break;
         case hash("data"):
             hasData = true;
+            break;
+        case hash("memorymode"):
+            if (absl::EqualsIgnoreCase(opcode.value, "compressed"))
+                memoryMode = MemoryMode::Compressed;
             break;
         }
     }
@@ -591,7 +597,7 @@ void Synth::Impl::handleSampleOpcodes(const std::vector<Opcode>& rawMembers)
     auto data = decodeBase64(sampleData);
     FilePool& filePool = resources_.getFilePool();
     FileId id { std::string(name) };
-    filePool.loadFromRam(id, data);
+    filePool.loadFromRam(id, std::move(data), memoryMode);
 }
 
 void Synth::Impl::resetDefaultCCValues() noexcept

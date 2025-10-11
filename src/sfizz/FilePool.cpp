@@ -404,21 +404,55 @@ sfz::FileDataHolder sfz::FilePool::loadFile(const FileId& fileId) noexcept
     return { &insertedPair.first->second };
 }
 
-sfz::FileDataHolder sfz::FilePool::loadFromRam(const FileId& fileId, const std::vector<char>& data) noexcept
+namespace {
+
+bool ensureDecodedForCompressed(sfz::FileData& data, bool reverse)
+{
+    if (data.memoryMode != sfz::MemoryMode::Compressed)
+        return true;
+
+    if (data.fileData.getNumFrames() != 0 || data.preloadedData.getNumFrames() != 0)
+        return true;
+
+    if (data.compressedData.empty())
+        return false;
+
+    auto reader = sfz::createAudioReaderFromMemory(data.compressedData.data(), data.compressedData.size(), reverse);
+    if (!reader)
+        return false;
+
+    const auto frames = static_cast<uint32_t>(reader->frames());
+    data.fileData = readFromFile(*reader, frames);
+    data.availableFrames = frames;
+    data.status = sfz::FileData::Status::Preloaded;
+    return true;
+}
+
+} // namespace
+
+sfz::FileDataHolder sfz::FilePool::loadFromRam(const FileId& fileId, std::vector<char> data,
+    MemoryMode memoryMode) noexcept
 {
     const auto loaded = loadedFiles.find(fileId);
-    if (loaded != loadedFiles.end())
+    if (loaded != loadedFiles.end()) {
+        loaded->second.preloadCallCount++;
         return { &loaded->second };
+    }
 
     auto reader = createAudioReaderFromMemory(data.data(), data.size(), fileId.isReverse());
     auto fileInformation = getReaderInformation(reader.get());
     const auto frames = static_cast<uint32_t>(reader->frames());
     auto insertedPair = loadedFiles.insert_or_assign(fileId, {
-        readFromFile(*reader, frames),
+        (memoryMode == MemoryMode::Compressed) ? FileAudioBuffer{} : readFromFile(*reader, frames),
         *fileInformation
     });
-    insertedPair.first->second.status = FileData::Status::Preloaded;
-    insertedPair.first->second.preloadCallCount++;
+    FileData& fileData = insertedPair.first->second;
+    fileData.status = FileData::Status::Preloaded;
+    fileData.preloadCallCount++;
+    fileData.availableFrames = (memoryMode == MemoryMode::Compressed) ? 0 : frames;
+    fileData.memoryMode = memoryMode;
+    if (memoryMode == MemoryMode::Compressed)
+        fileData.compressedData = std::move(data);
     DBG("Added a file " << fileId.filename());
     return { &insertedPair.first->second };
 }
@@ -426,8 +460,11 @@ sfz::FileDataHolder sfz::FilePool::loadFromRam(const FileId& fileId, const std::
 sfz::FileDataHolder sfz::FilePool::getFilePromise(const std::shared_ptr<FileId>& fileId) noexcept
 {
     const auto loaded = loadedFiles.find(*fileId);
-    if (loaded != loadedFiles.end())
+    if (loaded != loadedFiles.end()) {
+        if (!ensureDecodedForCompressed(loaded->second, fileId->isReverse()))
+            return {};
         return { &loaded->second };
+    }
 
     const auto preloaded = preloadedFiles.find(*fileId);
     if (preloaded == preloadedFiles.end()) {
