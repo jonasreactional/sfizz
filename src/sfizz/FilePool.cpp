@@ -440,7 +440,17 @@ sfz::FileDataHolder sfz::FilePool::loadFromRam(const FileId& fileId, std::vector
     }
 
     auto reader = createAudioReaderFromMemory(data.data(), data.size(), fileId.isReverse());
+    if (!reader) {
+        DBG("[sfizz] Could not create an audio reader for inline sample " << fileId.filename());
+        return {};
+    }
+
     auto fileInformation = getReaderInformation(reader.get());
+    if (!fileInformation) {
+        DBG("[sfizz] Unsupported audio format for inline sample " << fileId.filename());
+        return {};
+    }
+
     const auto frames = static_cast<uint32_t>(reader->frames());
     auto insertedPair = loadedFiles.insert_or_assign(fileId, {
         (memoryMode == MemoryMode::Compressed) ? FileAudioBuffer{} : readFromFile(*reader, frames),
