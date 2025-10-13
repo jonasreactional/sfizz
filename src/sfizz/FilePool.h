@@ -68,7 +68,8 @@ struct FileInformation {
 // Strict C++11 disallows member initialization if aggregate initialization is to be used...
 enum class MemoryMode {
     Default,
-    Compressed
+    Compressed,
+    Streaming
 };
 
 struct FileData
@@ -162,6 +163,7 @@ public:
         if (data->readerCount == 0 && data->memoryMode == MemoryMode::Compressed) {
             data->fileData.reset();
             data->availableFrames = 0;
+            data->status = FileData::Status::Preloaded;
         }
         data = nullptr;
     }

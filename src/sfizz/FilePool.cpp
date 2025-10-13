@@ -406,9 +406,9 @@ sfz::FileDataHolder sfz::FilePool::loadFile(const FileId& fileId) noexcept
 
 namespace {
 
-bool ensureDecodedForCompressed(sfz::FileData& data, bool reverse)
+bool ensureInlineDataReady(sfz::FileData& data, bool reverse)
 {
-    if (data.memoryMode != sfz::MemoryMode::Compressed)
+    if (data.memoryMode == sfz::MemoryMode::Default)
         return true;
 
     if (data.fileData.getNumFrames() != 0 || data.preloadedData.getNumFrames() != 0)
@@ -424,7 +424,7 @@ bool ensureDecodedForCompressed(sfz::FileData& data, bool reverse)
     const auto frames = static_cast<uint32_t>(reader->frames());
     data.fileData = readFromFile(*reader, frames);
     data.availableFrames = frames;
-    data.status = sfz::FileData::Status::Preloaded;
+    data.status = sfz::FileData::Status::Done;
     return true;
 }
 
@@ -453,15 +453,15 @@ sfz::FileDataHolder sfz::FilePool::loadFromRam(const FileId& fileId, std::vector
 
     const auto frames = static_cast<uint32_t>(reader->frames());
     auto insertedPair = loadedFiles.insert_or_assign(fileId, {
-        (memoryMode == MemoryMode::Compressed) ? FileAudioBuffer{} : readFromFile(*reader, frames),
+        (memoryMode == MemoryMode::Default) ? readFromFile(*reader, frames) : FileAudioBuffer{},
         *fileInformation
     });
     FileData& fileData = insertedPair.first->second;
     fileData.status = FileData::Status::Preloaded;
     fileData.preloadCallCount++;
-    fileData.availableFrames = (memoryMode == MemoryMode::Compressed) ? 0 : frames;
+    fileData.availableFrames = (memoryMode == MemoryMode::Default) ? frames : 0;
     fileData.memoryMode = memoryMode;
-    if (memoryMode == MemoryMode::Compressed)
+    if (memoryMode != MemoryMode::Default)
         fileData.compressedData = std::move(data);
     DBG("Added a file " << fileId.filename());
     return { &insertedPair.first->second };
@@ -471,7 +471,7 @@ sfz::FileDataHolder sfz::FilePool::getFilePromise(const std::shared_ptr<FileId>&
 {
     const auto loaded = loadedFiles.find(*fileId);
     if (loaded != loadedFiles.end()) {
-        if (!ensureDecodedForCompressed(loaded->second, fileId->isReverse()))
+        if (!ensureInlineDataReady(loaded->second, fileId->isReverse()))
             return {};
         return { &loaded->second };
     }
@@ -683,6 +683,7 @@ void sfz::FilePool::triggerGarbageCollection() noexcept
         return;
 
     const auto now = std::chrono::high_resolution_clock::now();
+    bool scheduledGarbage = false;
     swapAndPopAll(lastUsedFiles, [&](const FileId& id) {
         if (garbageToCollect.size() == garbageToCollect.capacity())
            return false;
@@ -711,10 +712,35 @@ void sfz::FilePool::triggerGarbageCollection() noexcept
         data.availableFrames = 0;
         data.status = FileData::Status::Preloaded;
         garbageToCollect.push_back(std::move(data.fileData));
+        scheduledGarbage = true;
         return true;
     });
 
-    std::error_code ec;
-    semGarbageBarrier.post(ec);
-    ASSERT(!ec);
+    for (auto& entry : loadedFiles) {
+        FileData& data = entry.second;
+        if (data.memoryMode != MemoryMode::Streaming)
+            continue;
+        if (data.fileData.getNumFrames() == 0)
+            continue;
+        if (data.readerCount != 0)
+            continue;
+
+        const auto secondsIdle = std::chrono::duration_cast<std::chrono::seconds>(now - data.lastViewerLeftAt).count();
+        if (secondsIdle < config::fileClearingPeriod)
+            continue;
+
+        if (garbageToCollect.size() == garbageToCollect.capacity())
+            break;
+
+        data.availableFrames = 0;
+        data.status = FileData::Status::Preloaded;
+        garbageToCollect.push_back(std::move(data.fileData));
+        scheduledGarbage = true;
+    }
+
+    if (scheduledGarbage) {
+        std::error_code ec;
+        semGarbageBarrier.post(ec);
+        ASSERT(!ec);
+    }
 }
