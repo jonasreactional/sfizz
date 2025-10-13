@@ -576,6 +576,8 @@ void Synth::Impl::handleSampleOpcodes(const std::vector<Opcode>& rawMembers)
         case hash("memorymode"):
             if (absl::EqualsIgnoreCase(opcode.value, "compressed"))
                 memoryMode = MemoryMode::Compressed;
+            else if (absl::EqualsIgnoreCase(opcode.value, "streaming"))
+                memoryMode = MemoryMode::Streaming;
             break;
         }
     }

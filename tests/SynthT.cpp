@@ -14,6 +14,8 @@
 #include "TestHelpers.h"
 #include "catch2/catch.hpp"
 #include <algorithm>
+#include <fstream>
+#include <iterator>
 using namespace Catch::literals;
 using namespace sfz::literals;
 
@@ -2146,4 +2148,33 @@ TEST_CASE("[Synth] Load inline compressed ogg sample")
     const auto sfzPath = fs::current_path() / "sfzfiles/test.sfz";
     REQUIRE(synth.loadSfzFile(sfzPath));
     REQUIRE(synth.getNumRegions() > 0);
+
+    sfz::AudioBuffer<float> buffer { 2, static_cast<unsigned>(synth.getSamplesPerBlock()) };
+    synth.noteOn(0, 36, 63);
+    synth.renderBlock(buffer);
+}
+
+TEST_CASE("[Synth] Load inline streaming ogg sample")
+{
+    sfz::Synth synth;
+    const auto sfzPath = fs::current_path() / "sfzfiles/test.sfz";
+
+    std::ifstream stream { sfzPath.string(), std::ios::binary };
+    REQUIRE(stream.good());
+    std::string content { std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>() };
+    REQUIRE_FALSE(content.empty());
+
+    const std::string tag { "<sample>" };
+    const auto pos = content.find(tag);
+    REQUIRE(pos != std::string::npos);
+    content.insert(pos + tag.size(), " memorymode=streaming");
+
+    REQUIRE(synth.loadSfzString(sfzPath, content));
+    REQUIRE(synth.getNumRegions() > 0);
+
+    sfz::AudioBuffer<float> buffer { 2, static_cast<unsigned>(synth.getSamplesPerBlock()) };
+    synth.noteOn(0, 36, 80);
+    synth.renderBlock(buffer);
+    synth.noteOff(0, 36, 0);
+    synth.renderBlock(buffer);
 }
