@@ -559,7 +559,7 @@ void Synth::Impl::handleSampleOpcodes(const std::vector<Opcode>& rawMembers)
     absl::string_view name { "" };
     bool hasData { false };
     absl::string_view sampleData;
-    MemoryMode memoryMode { MemoryMode::Compressed };
+    MemoryMode memoryMode { MemoryMode::Streaming };
 
     for (const Opcode& opcode : rawMembers) {
         switch (opcode.lettersOnlyHash) {
