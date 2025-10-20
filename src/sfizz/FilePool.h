@@ -34,6 +34,7 @@
 #include "SIMDHelpers.h"
 #include "SpinMutex.h"
 #include "utility/Timing.h"
+#include "utility/Debug.h"
 #include "utility/LeakDetector.h"
 #include "utility/MemoryHelpers.h"
 #include <ghc/fs_std.hpp>
@@ -46,7 +47,6 @@
 #include <future>
 #include <memory>
 #include <vector>
-#include <algorithm>
 class ThreadPool;
 
 namespace sfz {
@@ -84,25 +84,24 @@ struct FileData
     }
     AudioSpan<const float> getData()
     {
-        const size_t preloadFrames = preloadedData.getNumFrames();
-        const size_t readyFrames = availableFrames.load();
-        const size_t fileFrames = fileData.getNumFrames();
-        if (readyFrames > preloadFrames && fileFrames != 0)
-            return AudioSpan<const float>(fileData).first(std::min(readyFrames, fileFrames));
-
+        if (availableFrames > preloadedData.getNumFrames())
+        {
+            auto span = AudioSpan<const float>(fileData).first(availableFrames);
 #ifndef NDEBUG
-        const auto currentStatus = status.load();
-        if ((currentStatus == Status::Streaming || currentStatus == Status::Done) && fileFrames == 0) {
-            DBG("[sfizz] Inline sample has no fileData frames (ready=" << readyFrames
-                << ", preload=" << preloadFrames << ", mode=" << static_cast<int>(memoryMode)
-                << ", status=" << static_cast<int>(currentStatus) << ")");
-        } else if (currentStatus == Status::Done && readyFrames <= preloadFrames) {
-            DBG("[sfizz] Inline sample still falling back to preloaded chunk (ready="
-                << readyFrames << ", preload=" << preloadFrames << ", frames="
-                << (information.end + 1) << ")");
-        }
+            DBG("[sfizz] Returning decoded span frames=" << availableFrames.load()
+                << " preloaded=" << preloadedData.getNumFrames()
+                << " mode=" << static_cast<int>(memoryMode));
 #endif
-        return AudioSpan<const float>(preloadedData);
+            return span;
+        }
+        else {
+#ifndef NDEBUG
+            DBG("[sfizz] Returning preloaded chunk frames=" << preloadedData.getNumFrames()
+                << " available=" << availableFrames.load()
+                << " mode=" << static_cast<int>(memoryMode));
+#endif
+            return AudioSpan<const float>(preloadedData);
+        }
     }
 
     FileData(const FileData& other) = delete;
@@ -136,10 +135,10 @@ struct FileData
     std::atomic<Status> status { Status::Invalid };
     std::atomic<size_t> availableFrames { 0 };
     std::atomic<int> readerCount { 0 };
-    std::atomic<bool> streamingScheduled { false };
     std::chrono::time_point<std::chrono::high_resolution_clock> lastViewerLeftAt;
     MemoryMode memoryMode { MemoryMode::Default };
     std::vector<char> compressedData;
+    std::atomic<bool> streamingScheduled { false };
 
     LEAK_DETECTOR(FileData);
 };
@@ -178,15 +177,8 @@ public:
         if (data->readerCount == 0) {
             if (data->memoryMode == MemoryMode::Compressed) {
                 data->fileData.reset();
-                data->availableFrames = 0;
-                data->status = FileData::Status::Preloaded;
-                data->streamingScheduled = false;
-            } else if (data->memoryMode == MemoryMode::Streaming
-                && data->status.load() == FileData::Status::Done) {
-                data->fileData.reset();
                 data->availableFrames = data->preloadedData.getNumFrames();
                 data->status = FileData::Status::Preloaded;
-                data->streamingScheduled = false;
             }
         }
         data = nullptr;

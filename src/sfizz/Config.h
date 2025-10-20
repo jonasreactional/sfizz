@@ -41,7 +41,7 @@ namespace config {
     constexpr int bufferPoolSize { 6 };
     constexpr int stereoBufferPoolSize { 4 };
     constexpr int indexBufferPoolSize { 4 };
-    constexpr int preloadSize { 8192 };
+    constexpr int preloadSize { 1024 };
     constexpr bool loadInRam { false };
     constexpr int loggerQueueSize { 256 };
     constexpr int voiceLoggerQueueSize { 256 };
