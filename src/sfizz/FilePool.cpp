@@ -417,6 +417,11 @@ bool ensureInlineDataReady(sfz::FileData& data, bool reverse)
     if (data.memoryMode == sfz::MemoryMode::Default)
         return true;
 
+    if (data.memoryMode == sfz::MemoryMode::Streaming) {
+        // Streaming uses asynchronous filling, rely on background jobs.
+        return true;
+    }
+
     if (data.fileData.getNumFrames() != 0)
         return true;
 
@@ -431,6 +436,9 @@ bool ensureInlineDataReady(sfz::FileData& data, bool reverse)
     data.fileData = readFromFile(*reader, frames);
     data.availableFrames = frames;
     data.status = sfz::FileData::Status::Done;
+    DBG("[sfizz] Inline data ready: decoded " << frames << " frames"
+        << " (preloaded=" << data.preloadedData.getNumFrames()
+        << ", mode=" << static_cast<int>(data.memoryMode) << ")");
     return true;
 }
 
@@ -474,10 +482,13 @@ sfz::FileDataHolder sfz::FilePool::loadFromRam(const FileId& fileId, std::vector
     FileData& fileData = insertedPair.first->second;
     fileData.status = FileData::Status::Preloaded;
     fileData.preloadCallCount++;
-    fileData.availableFrames = (memoryMode == MemoryMode::Default) ? frames : 0;
+    fileData.availableFrames = (memoryMode == MemoryMode::Default)
+        ? frames
+        : initialBuffer.getNumFrames();
     fileData.memoryMode = memoryMode;
     if (memoryMode != MemoryMode::Default)
         fileData.compressedData = std::move(data);
+    fileData.streamingScheduled = false;
     DBG("Added a file " << fileId.filename());
     return { &insertedPair.first->second };
 }
@@ -486,9 +497,21 @@ sfz::FileDataHolder sfz::FilePool::getFilePromise(const std::shared_ptr<FileId>&
 {
     const auto loaded = loadedFiles.find(*fileId);
     if (loaded != loadedFiles.end()) {
-        if (!ensureInlineDataReady(loaded->second, fileId->isReverse()))
+        FileData& data = loaded->second;
+
+        if (!ensureInlineDataReady(data, fileId->isReverse()))
             return {};
-        return { &loaded->second };
+
+        if (data.memoryMode == MemoryMode::Streaming) {
+            auto expected = FileData::Status::Preloaded;
+            if (!data.streamingScheduled.load()
+                && data.status.compare_exchange_strong(expected, FileData::Status::Streaming)) {
+                if (!scheduleInlineStreaming(fileId, data))
+                    data.status = FileData::Status::Preloaded;
+            }
+        }
+
+        return { &data };
     }
 
     const auto preloaded = preloadedFiles.find(*fileId);
@@ -594,6 +617,80 @@ template <typename R>
 bool is_ready(std::future<R> const& f)
 {
     return f.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
+}
+
+bool sfz::FilePool::scheduleInlineStreaming(const std::shared_ptr<FileId>& fileId, FileData& data) noexcept
+{
+    if (!threadPool || !fileId || data.compressedData.empty()) {
+        data.streamingScheduled = false;
+        DBG("[sfizz] Inline streaming skipped for " << (fileId ? fileId->filename() : "<unknown>")
+            << " (threadPool=" << static_cast<bool>(threadPool)
+            << ", hasData=" << !data.compressedData.empty() << ")");
+        return false;
+    }
+
+    data.streamingScheduled = true;
+    DBG("[sfizz] Scheduling inline streaming for " << fileId->filename());
+
+    auto future = threadPool->enqueue([this, fileId, dataPtr = &data]() {
+        DBG("[sfizz] Inline streaming job started for " << fileId->filename());
+        inlineStreamingJob(fileId, dataPtr);
+    });
+
+    std::lock_guard<std::mutex> guard { loadingJobsMutex };
+    loadingJobs.push_back(std::move(future));
+    swapAndPopAll(loadingJobs, [](std::future<void>& f) { return is_ready(f); });
+    return true;
+}
+
+void sfz::FilePool::inlineStreamingJob(std::shared_ptr<FileId> fileId, FileData* data) noexcept
+{
+    if (!data) {
+        DBG("[sfizz] Inline streaming job aborted: null data");
+        return;
+    }
+
+    struct StreamingGuard {
+        FileData* data;
+        ~StreamingGuard() { if (data) data->streamingScheduled = false; }
+    } guard { data };
+
+    if (data->compressedData.empty()) {
+        DBG("[sfizz] Inline streaming job aborted: no compressed data");
+        data->availableFrames = data->preloadedData.getNumFrames();
+        data->status = FileData::Status::Preloaded;
+        return;
+    }
+
+    auto reader = createAudioReaderFromMemory(
+        data->compressedData.data(),
+        data->compressedData.size(),
+        fileId ? fileId->isReverse() : false);
+
+    if (!reader) {
+        DBG("[sfizz] Inline streaming job failed: cannot create reader");
+        data->availableFrames = data->preloadedData.getNumFrames();
+        data->status = FileData::Status::Preloaded;
+        return;
+    }
+
+    data->availableFrames = 0;
+    streamFromFile(*reader, data->fileData, &data->availableFrames);
+    data->availableFrames = data->fileData.getNumFrames();
+
+    if (data->readerCount.load() == 0) {
+        DBG("[sfizz] Inline streaming completed (no active readers) for "
+            << (fileId ? fileId->filename() : "<unknown>")
+            << ", frames=" << data->fileData.getNumFrames());
+        data->fileData.reset();
+        data->availableFrames = data->preloadedData.getNumFrames();
+        data->status = FileData::Status::Preloaded;
+    } else {
+        DBG("[sfizz] Inline streaming completed for "
+            << (fileId ? fileId->filename() : "<unknown>")
+            << ", frames=" << data->fileData.getNumFrames());
+        data->status = FileData::Status::Done;
+    }
 }
 
 void sfz::FilePool::dispatchingJob() noexcept

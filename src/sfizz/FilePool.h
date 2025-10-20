@@ -46,6 +46,7 @@
 #include <future>
 #include <memory>
 #include <vector>
+#include <algorithm>
 class ThreadPool;
 
 namespace sfz {
@@ -83,10 +84,25 @@ struct FileData
     }
     AudioSpan<const float> getData()
     {
-        if (availableFrames > preloadedData.getNumFrames())
-            return AudioSpan<const float>(fileData).first(availableFrames);
-        else
-            return AudioSpan<const float>(preloadedData);
+        const size_t preloadFrames = preloadedData.getNumFrames();
+        const size_t readyFrames = availableFrames.load();
+        const size_t fileFrames = fileData.getNumFrames();
+        if (readyFrames > preloadFrames && fileFrames != 0)
+            return AudioSpan<const float>(fileData).first(std::min(readyFrames, fileFrames));
+
+#ifndef NDEBUG
+        const auto currentStatus = status.load();
+        if ((currentStatus == Status::Streaming || currentStatus == Status::Done) && fileFrames == 0) {
+            DBG("[sfizz] Inline sample has no fileData frames (ready=" << readyFrames
+                << ", preload=" << preloadFrames << ", mode=" << static_cast<int>(memoryMode)
+                << ", status=" << static_cast<int>(currentStatus) << ")");
+        } else if (currentStatus == Status::Done && readyFrames <= preloadFrames) {
+            DBG("[sfizz] Inline sample still falling back to preloaded chunk (ready="
+                << readyFrames << ", preload=" << preloadFrames << ", frames="
+                << (information.end + 1) << ")");
+        }
+#endif
+        return AudioSpan<const float>(preloadedData);
     }
 
     FileData(const FileData& other) = delete;
@@ -120,6 +136,7 @@ struct FileData
     std::atomic<Status> status { Status::Invalid };
     std::atomic<size_t> availableFrames { 0 };
     std::atomic<int> readerCount { 0 };
+    std::atomic<bool> streamingScheduled { false };
     std::chrono::time_point<std::chrono::high_resolution_clock> lastViewerLeftAt;
     MemoryMode memoryMode { MemoryMode::Default };
     std::vector<char> compressedData;
@@ -158,10 +175,19 @@ public:
 
         data->readerCount -= 1;
         data->lastViewerLeftAt = highResNow();
-        if (data->readerCount == 0 && data->memoryMode == MemoryMode::Compressed) {
-            data->fileData.reset();
-            data->availableFrames = 0;
-            data->status = FileData::Status::Preloaded;
+        if (data->readerCount == 0) {
+            if (data->memoryMode == MemoryMode::Compressed) {
+                data->fileData.reset();
+                data->availableFrames = 0;
+                data->status = FileData::Status::Preloaded;
+                data->streamingScheduled = false;
+            } else if (data->memoryMode == MemoryMode::Streaming
+                && data->status.load() == FileData::Status::Done) {
+                data->fileData.reset();
+                data->availableFrames = data->preloadedData.getNumFrames();
+                data->status = FileData::Status::Preloaded;
+                data->streamingScheduled = false;
+            }
         }
         data = nullptr;
     }
@@ -379,6 +405,8 @@ private:
     void dispatchingJob() noexcept;
     void garbageJob() noexcept;
     void loadingJob(const QueuedFileData& data) noexcept;
+    bool scheduleInlineStreaming(const std::shared_ptr<FileId>& fileId, FileData& data) noexcept;
+    void inlineStreamingJob(std::shared_ptr<FileId> fileId, FileData* data) noexcept;
     std::mutex loadingJobsMutex;
     std::vector<std::future<void>> loadingJobs;
     std::thread dispatchThread { &FilePool::dispatchingJob, this };
