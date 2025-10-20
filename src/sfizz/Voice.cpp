@@ -1069,6 +1069,11 @@ void Voice::Impl::fillWithData(AudioSpan<float> buffer) noexcept
 
     auto source = currentPromise_->getData();
 
+    if (source.getNumChannels() == 0 || source.getNumFrames() == 0) {
+        DBG("[Voice] Empty sample data for " << region_->sampleId->filename());
+        return;
+    }
+
     BufferPool& bufferPool = resources_.getBufferPool();
     const CurveSet& curves = resources_.getCurves();
 

@@ -559,7 +559,7 @@ void Synth::Impl::handleSampleOpcodes(const std::vector<Opcode>& rawMembers)
     absl::string_view name { "" };
     bool hasData { false };
     absl::string_view sampleData;
-    MemoryMode memoryMode { MemoryMode::Streaming };
+    MemoryMode memoryMode { MemoryMode::Compressed };
 
     for (const Opcode& opcode : rawMembers) {
         switch (opcode.lettersOnlyHash) {
@@ -761,10 +761,15 @@ void Synth::Impl::finalizeSfzLoad()
             if (fileInformation->end < config::wavetableMaxFrames) {
                 auto sample = filePool.loadFile(*region.sampleId);
                 bool allZeros = true;
-                int numChannels = sample->information.numChannels;
-                for (int i = 0; i < numChannels; ++i) {
-                    allZeros &= allWithin(sample->preloadedData.getConstSpan(i),
+                auto sampleData = sample->getData();
+                if (sampleData.getNumChannels() == 0) {
+                    allZeros = false;
+                } else {
+                    const int numChannels = static_cast<int>(sampleData.getNumChannels());
+                    for (int i = 0; i < numChannels; ++i) {
+                        allZeros &= allWithin(sampleData.getConstSpan(i),
                         -config::virtuallyZero, config::virtuallyZero);
+                    }
                 }
 
                 if (allZeros) {

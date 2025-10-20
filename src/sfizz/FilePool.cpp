@@ -97,6 +97,10 @@ sfz::FileAudioBuffer readFromFile(sfz::AudioReader& reader, uint32_t numFrames)
     return baseBuffer;
 }
 
+namespace {
+bool ensureInlineDataReady(sfz::FileData& data, bool reverse);
+}
+
 void streamFromFile(sfz::AudioReader& reader, sfz::FileAudioBuffer& output, std::atomic<size_t>* filledFrames = nullptr)
 {
     const auto numFrames = static_cast<size_t>(reader.frames());
@@ -387,6 +391,8 @@ sfz::FileDataHolder sfz::FilePool::loadFile(const FileId& fileId) noexcept
 
     const auto existingFile = loadedFiles.find(fileId);
     if (existingFile != loadedFiles.end()) {
+        if (!ensureInlineDataReady(existingFile->second, fileId.isReverse()))
+            return {};
         existingFile->second.preloadCallCount++;
         return { &existingFile->second };
     }
