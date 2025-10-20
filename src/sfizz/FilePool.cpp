@@ -417,7 +417,7 @@ bool ensureInlineDataReady(sfz::FileData& data, bool reverse)
     if (data.memoryMode == sfz::MemoryMode::Default)
         return true;
 
-    if (data.fileData.getNumFrames() != 0 || data.preloadedData.getNumFrames() != 0)
+    if (data.fileData.getNumFrames() != 0)
         return true;
 
     if (data.compressedData.empty())
@@ -458,8 +458,17 @@ sfz::FileDataHolder sfz::FilePool::loadFromRam(const FileId& fileId, std::vector
     }
 
     const auto frames = static_cast<uint32_t>(reader->frames());
+    FileAudioBuffer initialBuffer;
+    if (memoryMode == MemoryMode::Default) {
+        initialBuffer = readFromFile(*reader, frames);
+    } else {
+        const auto preloadFrames = static_cast<uint32_t>(std::min<uint32_t>(frames, preloadSize));
+        if (preloadFrames > 0)
+            initialBuffer = readFromFile(*reader, preloadFrames);
+    }
+
     auto insertedPair = loadedFiles.insert_or_assign(fileId, {
-        (memoryMode == MemoryMode::Default) ? readFromFile(*reader, frames) : FileAudioBuffer{},
+        std::move(initialBuffer),
         *fileInformation
     });
     FileData& fileData = insertedPair.first->second;
