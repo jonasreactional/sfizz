@@ -463,7 +463,7 @@ sfz::FileDataHolder sfz::FilePool::loadFromRam(const FileId& fileId, std::vector
             preloadedBuffer = readFromFile(*reader, preloadFrames);
     }
 
-    DBG("[sfizz][Inline] loadFromRam file=" << fileId.filename()
+    SFIZZ_INLINE_LOG("loadFromRam file=" << fileId.filename()
         << " frames=" << frames
         << " preload=" << ((memoryMode == MemoryMode::Default) ? frames : preloadedBuffer.getNumFrames())
         << " mode=" << static_cast<int>(memoryMode));
@@ -483,7 +483,7 @@ sfz::FileDataHolder sfz::FilePool::loadFromRam(const FileId& fileId, std::vector
         fileData.compressedData = std::move(data);
     else
         fileData.compressedData.clear();
-    DBG("[sfizz][Inline] loadFromRam done file=" << fileId.filename()
+    SFIZZ_INLINE_LOG("loadFromRam done file=" << fileId.filename()
         << " cachedFrames=" << fileData.availableFrames.load()
         << " compressedBytes=" << fileData.compressedData.size());
     return { &insertedPair.first->second };
@@ -497,23 +497,23 @@ sfz::FileDataHolder sfz::FilePool::getFilePromise(const std::shared_ptr<FileId>&
     if (loaded != loadedFiles.end()) {
         FileData& data = loaded->second;
         if (isInline && data.memoryMode == MemoryMode::Default) {
-            DBG("[sfizz][Inline][WARN] Inline sample " << fileId->filename()
+            SFIZZ_INLINE_LOG("[WARN] Inline sample " << fileId->filename()
                 << " was stored in Default mode. Running synchronous decode.");
             if (!ensureInlineDataReady(data, fileId->isReverse())) {
-                DBG("[sfizz][Inline][ERR] ensureInlineDataReady failed for " << fileId->filename());
+                SFIZZ_INLINE_LOG("[ERR] ensureInlineDataReady failed for " << fileId->filename());
                 return {};
             }
             data.memoryMode = MemoryMode::Streaming;
             data.status = FileData::Status::Done;
-            DBG("[sfizz][Inline] Synchronous decode complete for " << fileId->filename()
+            SFIZZ_INLINE_LOG("Synchronous decode complete for " << fileId->filename()
                 << " frames=" << data.availableFrames.load());
         } else if (data.memoryMode != MemoryMode::Default) {
             if (!ensureInlineDataReady(data, fileId->isReverse())) {
-                DBG("[sfizz][Inline][ERR] ensureInlineDataReady failed for loaded " << fileId->filename());
+                SFIZZ_INLINE_LOG("[ERR] ensureInlineDataReady failed for loaded " << fileId->filename());
                 return {};
             }
         }
-        DBG("[sfizz][Inline] returning loaded data " << fileId->filename()
+        SFIZZ_INLINE_LOG("Returning loaded data " << fileId->filename()
             << " mode=" << static_cast<int>(data.memoryMode)
             << " status=" << static_cast<int>(data.status.load())
             << " available=" << data.availableFrames.load()
@@ -530,38 +530,38 @@ sfz::FileDataHolder sfz::FilePool::getFilePromise(const std::shared_ptr<FileId>&
     if (data.memoryMode != MemoryMode::Default) {
         if (data.status == FileData::Status::Preloaded && !data.streamingScheduled.load()) {
             if (!scheduleInlineStreaming(fileId, data)) {
-                DBG("[sfizz][Inline] scheduleInlineStreaming failed -> synchronous decode for " << fileId->filename());
+                SFIZZ_INLINE_LOG("scheduleInlineStreaming failed -> synchronous decode for " << fileId->filename());
                 if (!ensureInlineDataReady(data, fileId->isReverse())) {
-                    DBG("[sfizz][Inline][ERR] ensureInlineDataReady failed for preloaded " << fileId->filename());
+                SFIZZ_INLINE_LOG("[ERR] ensureInlineDataReady failed for preloaded " << fileId->filename());
                     return {};
                 }
                 data.status = FileData::Status::Done;
-                DBG("[sfizz][Inline] synchronous decode complete for " << fileId->filename()
+                SFIZZ_INLINE_LOG("Synchronous decode complete for " << fileId->filename()
                     << " frames=" << data.availableFrames.load());
             }
             else {
-                DBG("[sfizz][Inline] streaming scheduled for " << fileId->filename()
+                SFIZZ_INLINE_LOG("Streaming scheduled for " << fileId->filename()
                     << " preloadFrames=" << data.preloadedData.getNumFrames());
             }
         }
-        DBG("[sfizz][Inline] returning inline promise " << fileId->filename()
+        SFIZZ_INLINE_LOG("Returning inline promise " << fileId->filename()
             << " status=" << static_cast<int>(data.status.load())
             << " available=" << data.availableFrames.load()
             << " compressed=" << data.compressedData.size());
         return { &data };
     } else {
-        DBG("[sfizz][Inline][TRACE] Returning inline Default path for " << fileId->filename()
+        SFIZZ_INLINE_LOG("[TRACE] Returning inline Default path for " << fileId->filename()
             << " before ensureInline, available=" << data.availableFrames.load()
             << " status=" << static_cast<int>(data.status.load())
             << " compressed=" << data.compressedData.size());
         if (!ensureInlineDataReady(data, fileId->isReverse())) {
-            DBG("[sfizz] ensureInlineDataReady failed for " << fileId->filename());
+            SFIZZ_INLINE_LOG("[ERR] ensureInlineDataReady failed for " << fileId->filename());
             return {};
         }
 
         if (isInline)
         {
-            DBG("[sfizz][Inline][WARN] Inline sample " << fileId->filename()
+            SFIZZ_INLINE_LOG("[WARN] Inline sample " << fileId->filename()
                 << " in Default mode after ensure, available=" << data.availableFrames.load()
                 << " compressed=" << data.compressedData.size());
             return { &data };
@@ -569,14 +569,14 @@ sfz::FileDataHolder sfz::FilePool::getFilePromise(const std::shared_ptr<FileId>&
 
         QueuedFileData queuedData { fileId, &preloaded->second };
         if (!filesToLoad->try_push(queuedData)) {
-            DBG("[sfizz] Could not enqueue the file to load for " << fileId << " (queue capacity " << filesToLoad->capacity() << ")");
+            SFIZZ_INLINE_LOG("Could not enqueue the file to load for " << fileId << " (queue capacity " << filesToLoad->capacity() << ")");
             return {};
         }
 
         std::error_code ec;
         dispatchBarrier.post(ec);
         ASSERT(!ec);
-        DBG("[sfizz] returning disk preloaded promise " << fileId->filename());
+        SFIZZ_INLINE_LOG("Returning disk preloaded promise " << fileId->filename());
         return { &preloaded->second };
     }
 }
@@ -672,7 +672,7 @@ bool sfz::FilePool::scheduleInlineStreaming(const std::shared_ptr<FileId>& fileI
 {
     if (!threadPool || !fileId || data.compressedData.empty()) {
         data.streamingScheduled = false;
-        DBG("[sfizz][Inline] scheduleInlineStreaming rejected file="
+        SFIZZ_INLINE_LOG("scheduleInlineStreaming rejected file="
             << (fileId ? fileId->filename() : std::string("<null>"))
             << " threadPool=" << (threadPool ? "ok" : "null")
             << " compressed=" << data.compressedData.size());
@@ -685,7 +685,7 @@ bool sfz::FilePool::scheduleInlineStreaming(const std::shared_ptr<FileId>& fileI
     }
     data.streamingScheduled = true;
 
-    DBG("[sfizz][Inline] scheduleInlineStreaming file=" << fileId->filename()
+    SFIZZ_INLINE_LOG("scheduleInlineStreaming file=" << fileId->filename()
         << " compressedBytes=" << data.compressedData.size()
         << " preloadFrames=" << data.preloadedData.getNumFrames());
     auto future = threadPool->enqueue([this, fileId, dataPtr = &data]() {
@@ -712,7 +712,7 @@ void sfz::FilePool::inlineStreamingJob(std::shared_ptr<FileId> fileId, FileData*
     data->status = FileData::Status::Streaming;
 
     if (data->compressedData.empty()) {
-        DBG("[sfizz][Inline] inlineStreamingJob abort (no compressed data)");
+        SFIZZ_INLINE_LOG("inlineStreamingJob abort (no compressed data)");
         data->status = FileData::Status::Preloaded;
         return;
     }
@@ -723,7 +723,7 @@ void sfz::FilePool::inlineStreamingJob(std::shared_ptr<FileId> fileId, FileData*
         fileId ? fileId->isReverse() : false);
 
     if (!reader) {
-        DBG("[sfizz][Inline] inlineStreamingJob failed to create reader");
+        SFIZZ_INLINE_LOG("inlineStreamingJob failed to create reader");
         data->status = FileData::Status::Preloaded;
         return;
     }
@@ -744,7 +744,7 @@ void sfz::FilePool::inlineStreamingJob(std::shared_ptr<FileId> fileId, FileData*
 
     const size_t preloadFrames = data->preloadedData.getNumFrames();
     data->availableFrames.store(preloadFrames, std::memory_order_release);
-    DBG("[sfizz][Inline] inlineStreamingJob begin file="
+    SFIZZ_INLINE_LOG("inlineStreamingJob begin file="
         << (fileId ? fileId->filename() : std::string("<unknown>"))
         << " totalFrames=" << numFrames
         << " preload=" << preloadFrames
@@ -779,7 +779,7 @@ void sfz::FilePool::inlineStreamingJob(std::shared_ptr<FileId> fileId, FileData*
         size_t totalAvailable = preloadFrames + decodedBeyondPreload;
         totalAvailable = std::min(totalAvailable, numFrames);
         data->availableFrames.store(totalAvailable, std::memory_order_release);
-        DBG("[sfizz][Inline] inlineStreamingJob chunk file="
+        SFIZZ_INLINE_LOG("inlineStreamingJob chunk file="
             << (fileId ? fileId->filename() : std::string("<unknown>"))
             << " decoded=" << inputFrameCounter
             << " available=" << totalAvailable);
@@ -794,7 +794,7 @@ void sfz::FilePool::inlineStreamingJob(std::shared_ptr<FileId> fileId, FileData*
         if (absl::c_find(lastUsedFiles, *fileId) == lastUsedFiles.end())
             lastUsedFiles.push_back(*fileId);
     }
-    DBG("[sfizz][Inline] inlineStreamingJob done file="
+    SFIZZ_INLINE_LOG("inlineStreamingJob done file="
         << (fileId ? fileId->filename() : std::string("<unknown>"))
         << " decodedFrames=" << finalFrames);
 }

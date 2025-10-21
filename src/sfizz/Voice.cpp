@@ -479,7 +479,7 @@ bool Voice::startVoice(Layer* layer, int delay, const TriggerEvent& event) noexc
             return false;
         }
         auto& fileData = *impl.currentPromise_;
-        DBG("[Voice][Inline] acquired sample=" << region.sampleId->filename()
+        SFIZZ_INLINE_LOG("Voice acquired sample=" << region.sampleId->filename()
             << " mode=" << static_cast<int>(fileData.memoryMode)
             << " status=" << static_cast<int>(fileData.status.load())
             << " available=" << fileData.availableFrames.load()
@@ -1076,7 +1076,7 @@ void Voice::Impl::fillWithData(AudioSpan<float> buffer) noexcept
 
     auto source = currentPromise_->getData();
     if (age_ == 0) {
-        DBG("[Voice][Inline] first fill sample=" << region_->sampleId->filename()
+        SFIZZ_INLINE_LOG("Voice first fill sample=" << region_->sampleId->filename()
             << " sourceFrames=" << source.getNumFrames()
             << " channels=" << source.getNumChannels()
             << " available=" << currentPromise_->availableFrames.load());

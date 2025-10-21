@@ -47,6 +47,14 @@
 #include <future>
 #include <memory>
 #include <vector>
+
+#ifndef SFIZZ_INLINE_LOG
+#if defined(SFIZZ_ENABLE_INLINE_LOGS)
+#define SFIZZ_INLINE_LOG(msg) DBG("[sfizz][Inline] " << msg)
+#else
+#define SFIZZ_INLINE_LOG(msg) do { } while (false)
+#endif
+#endif
 class ThreadPool;
 
 namespace sfz {
@@ -87,19 +95,19 @@ struct FileData
         if (availableFrames > preloadedData.getNumFrames())
         {
             auto span = AudioSpan<const float>(fileData).first(availableFrames);
-#ifndef NDEBUG
-            DBG("[sfizz] Returning decoded span frames=" << availableFrames.load()
-                << " preloaded=" << preloadedData.getNumFrames()
-                << " mode=" << static_cast<int>(memoryMode));
-#endif
+// #ifndef NDEBUG
+//             DBG("[sfizz] Returning decoded span frames=" << availableFrames.load()
+//                 << " preloaded=" << preloadedData.getNumFrames()
+//                 << " mode=" << static_cast<int>(memoryMode));
+// #endif
             return span;
         }
         else {
-#ifndef NDEBUG
-            DBG("[sfizz] Returning preloaded chunk frames=" << preloadedData.getNumFrames()
-                << " available=" << availableFrames.load()
-                << " mode=" << static_cast<int>(memoryMode));
-#endif
+// #ifndef NDEBUG
+//             DBG("[sfizz] Returning preloaded chunk frames=" << preloadedData.getNumFrames()
+//                 << " available=" << availableFrames.load()
+//                 << " mode=" << static_cast<int>(memoryMode));
+// #endif
             return AudioSpan<const float>(preloadedData);
         }
     }
@@ -178,23 +186,21 @@ public:
         if (!data)
             return;
 
-        DBG("[sfizz][Inline][GC] FileDataHolder reset start for "
-            << data->information.sampleRate << "Hz file, mode="
-            << static_cast<int>(data->memoryMode)
+        SFIZZ_INLINE_LOG("GC reset start sampleRate=" << data->information.sampleRate
+            << " mode=" << static_cast<int>(data->memoryMode)
             << " readers=" << data->readerCount.load());
 
         data->readerCount -= 1;
         data->lastViewerLeftAt = highResNow();
         if (data->readerCount == 0) {
             if (data->memoryMode == MemoryMode::Compressed) {
-                DBG("[sfizz][Inline][GC] Resetting compressed inline data "
-                    << " (dropping decoded buffer, returning to preload)");
+                SFIZZ_INLINE_LOG("GC dropping decoded buffer (compressed mode)");
                 data->fileData.reset();
                 data->availableFrames = data->preloadedData.getNumFrames();
                 data->status = FileData::Status::Preloaded;
             }
         }
-        DBG("[sfizz][Inline][GC] FileDataHolder reset end, readerCount="
+        SFIZZ_INLINE_LOG("GC reset end readerCount="
             << data->readerCount.load()
             << " available=" << data->availableFrames.load()
             << " status=" << static_cast<int>(data->status.load()));
