@@ -391,10 +391,11 @@ struct Synth::Impl final: public Parser::Listener {
     struct InlineSampleEntry {
         std::vector<char> data;
         MemoryMode mode { MemoryMode::Streaming };
+        std::string alias;
+        std::string rawName;
     };
     std::string inlineSamplePrefix_;
-    absl::flat_hash_map<std::string, InlineSampleEntry> inlineSamples_; // keyed by alias
-    absl::flat_hash_map<std::string, std::string> inlineAliasByName_; // original name -> alias
+    absl::flat_hash_map<std::string, InlineSampleEntry> inlineSamples_; // keyed by canonical sample path
 };
 
 } // namespace sfz

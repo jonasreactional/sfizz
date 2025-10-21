@@ -115,6 +115,9 @@ struct FileData
         availableFrames = other.availableFrames.load();
         lastViewerLeftAt = other.lastViewerLeftAt;
         status = other.status.load();
+        memoryMode = other.memoryMode;
+        compressedData = std::move(other.compressedData);
+        streamingScheduled.store(other.streamingScheduled.load());
     }
     FileData& operator=(FileData&& other)
     {
@@ -125,6 +128,9 @@ struct FileData
         availableFrames = other.availableFrames.load();
         lastViewerLeftAt = other.lastViewerLeftAt;
         status = other.status.load();
+        memoryMode = other.memoryMode;
+        compressedData = std::move(other.compressedData);
+        streamingScheduled.store(other.streamingScheduled.load());
         return *this;
     }
 
@@ -172,15 +178,26 @@ public:
         if (!data)
             return;
 
+        DBG("[sfizz][Inline][GC] FileDataHolder reset start for "
+            << data->information.sampleRate << "Hz file, mode="
+            << static_cast<int>(data->memoryMode)
+            << " readers=" << data->readerCount.load());
+
         data->readerCount -= 1;
         data->lastViewerLeftAt = highResNow();
         if (data->readerCount == 0) {
             if (data->memoryMode == MemoryMode::Compressed) {
+                DBG("[sfizz][Inline][GC] Resetting compressed inline data "
+                    << " (dropping decoded buffer, returning to preload)");
                 data->fileData.reset();
                 data->availableFrames = data->preloadedData.getNumFrames();
                 data->status = FileData::Status::Preloaded;
             }
         }
+        DBG("[sfizz][Inline][GC] FileDataHolder reset end, readerCount="
+            << data->readerCount.load()
+            << " available=" << data->availableFrames.load()
+            << " status=" << static_cast<int>(data->status.load()));
         data = nullptr;
     }
     ~FileDataHolder()

@@ -326,7 +326,6 @@ void Synth::Impl::clear()
 
     initEffectBuses();
     inlineSamples_.clear();
-    inlineAliasByName_.clear();
     inlineSamplePrefix_ = absl::StrCat("__inline_", inlineSampleCounter.fetch_add(1), "/");
 }
 
@@ -601,6 +600,10 @@ void Synth::Impl::handleSampleOpcodes(const std::vector<Opcode>& rawMembers)
     if (name.empty())
         return;
 
+    absl::string_view trimmedName = trim(name);
+    if (trimmedName.empty())
+        return;
+
     if (hasData && sampleData.empty()) {
         DBG("The sample data provided for sample " << name
             << " doesn't use base64 encoding, which is the only one sfizz knows how to decode.\n "
@@ -612,20 +615,16 @@ void Synth::Impl::handleSampleOpcodes(const std::vector<Opcode>& rawMembers)
     if (sampleData.empty())
         return;
 
-    std::string originalName(name);
-    auto [aliasMapIt, aliasInserted] = inlineAliasByName_.try_emplace(originalName, absl::StrCat(inlineSamplePrefix_, originalName));
-    const std::string& alias = aliasMapIt->second;
-    if (aliasInserted) {
-        for (const auto& layerPtr : layers_) {
-            Region& existingRegion = layerPtr->getRegion();
-            if (!existingRegion.isGenerator() && existingRegion.sampleId->filename() == originalName)
-                *existingRegion.sampleId = FileId(alias, existingRegion.sampleId->isReverse());
-        }
-    }
+    std::string normalizedName = absl::StrReplaceAll(std::string(trimmedName), { { "\\", "/" } });
+    const bool isGenerator = !normalizedName.empty() && normalizedName.front() == '*';
+    std::string canonicalName = normalizedName;
+    if (!isGenerator)
+        canonicalName = absl::StrCat(defaultPath_, canonicalName);
 
-    InlineSampleEntry& entry = inlineSamples_[alias];
+    InlineSampleEntry& entry = inlineSamples_[canonicalName];
     entry.data = decodeBase64(sampleData);
-    entry.mode = memoryMode;
+    entry.mode = MemoryMode::Streaming;
+    entry.rawName = std::move(normalizedName);
 }
 
 void Synth::Impl::resetDefaultCCValues() noexcept
@@ -744,14 +743,59 @@ void Synth::Impl::finalizeSfzLoad()
     size_t currentRegionCount = layers_.size();
 
     absl::flat_hash_map<sfz::FileId, int64_t> filesToLoad;
+    absl::flat_hash_map<std::string, std::string> inlineAliasMap;
 
-    for (auto& [alias, sample] : inlineSamples_) {
-        FileId id { alias };
+    for (auto& [originalName, sample] : inlineSamples_) {
+        sample.alias = absl::StrCat(inlineSamplePrefix_, originalName);
+        FileId id { sample.alias };
         if (!sample.data.empty()) {
             filePool.loadFromRam(id, std::move(sample.data), sample.mode);
             sample.data.clear();
         }
+        inlineAliasMap.emplace(originalName, sample.alias);
+        if (!sample.rawName.empty())
+            inlineAliasMap.emplace(sample.rawName, sample.alias);
     }
+
+    auto findInlineAlias = [&](const std::string& candidate) -> const std::string* {
+        auto aliasIt = inlineAliasMap.find(candidate);
+        if (aliasIt != inlineAliasMap.end())
+            return &aliasIt->second;
+
+        InlineSampleEntry* bestEntry = nullptr;
+        size_t bestLength = 0;
+        for (auto& inlinePair : inlineSamples_) {
+            InlineSampleEntry& entry = inlinePair.second;
+            const std::string& raw = entry.rawName.empty() ? inlinePair.first : entry.rawName;
+            if (raw.empty())
+                continue;
+            if (candidate.size() < raw.size())
+                continue;
+
+            const size_t matchPos = candidate.size() - raw.size();
+            if (candidate.compare(matchPos, raw.size(), raw) != 0)
+                continue;
+
+            if (matchPos > 0) {
+                const char preceding = candidate[matchPos - 1];
+                if (preceding != '/' && preceding != '\\')
+                    continue;
+            }
+
+            if (raw.size() > bestLength) {
+                bestEntry = &entry;
+                bestLength = raw.size();
+            } else if (raw.size() == bestLength && bestEntry && entry.alias < bestEntry->alias) {
+                bestEntry = &entry;
+            }
+        }
+
+        if (!bestEntry)
+            return nullptr;
+
+        auto inserted = inlineAliasMap.emplace(candidate, bestEntry->alias);
+        return &inserted.first->second;
+    };
 
     auto removeCurrentRegion = [this, &currentRegionIndex, &currentRegionCount]() {
         const Region& region = layers_[currentRegionIndex]->getRegion();
@@ -782,21 +826,12 @@ void Synth::Impl::finalizeSfzLoad()
             std::string sampleName = region.sampleId->filename();
             bool isInlineSample = false;
 
-            auto aliasEntry = inlineSamples_.find(sampleName);
-            if (aliasEntry != inlineSamples_.end()) {
+            if (const std::string* alias = findInlineAlias(sampleName)) {
                 isInlineSample = true;
-            } else {
-                auto aliasMapIt = inlineAliasByName_.find(sampleName);
-                if (aliasMapIt != inlineAliasByName_.end()) {
-                    const std::string& alias = aliasMapIt->second;
-                    auto entryIt = inlineSamples_.find(alias);
-                    if (entryIt != inlineSamples_.end()) {
-                        *region.sampleId = FileId(alias, region.sampleId->isReverse());
-                        sampleName = alias;
-                        aliasEntry = entryIt;
-                        isInlineSample = true;
-                    }
-                }
+                *region.sampleId = FileId(*alias, region.sampleId->isReverse());
+                sampleName = *alias;
+            } else if (isInlineSampleName(sampleName)) {
+                isInlineSample = true;
             }
 
             if (!isInlineSample) {
