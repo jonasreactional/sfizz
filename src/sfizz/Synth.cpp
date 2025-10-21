@@ -836,6 +836,7 @@ void Synth::Impl::finalizeSfzLoad()
         }
 
         if (!region.isOscillator()) {
+            const bool isInlineRegionSample = isInlineSampleName(region.sampleId->filename());
             region.sampleEnd = min(region.sampleEnd, fileInformation->end);
 
             if (fileInformation->hasLoop) {
@@ -873,8 +874,7 @@ void Synth::Impl::finalizeSfzLoad()
                 return Default::offsetMod.bounds.clamp(sumOffsetCC);
             }();
 
-            if (!isInlineSample)
-            {
+            if (!isInlineRegionSample) {
                 auto& toLoad = filesToLoad[*region.sampleId];
                 toLoad = max(toLoad, maxOffset);
             }
