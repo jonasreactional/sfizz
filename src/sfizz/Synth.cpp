@@ -34,6 +34,7 @@
 #include <absl/algorithm/container.h>
 #include <absl/memory/memory.h>
 #include <absl/strings/match.h>
+#include <absl/strings/str_cat.h>
 #include <absl/strings/str_replace.h>
 #include <absl/types/optional.h>
 #include <absl/types/span.h>
@@ -42,11 +43,21 @@
 #include <iostream>
 #include <random>
 #include <utility>
+#include <atomic>
 
 namespace sfz {
 
 // unless set to permissive, the loader rejects sfz files with errors
 static constexpr bool loaderParsesPermissively = true;
+
+namespace {
+std::atomic<uint64_t> inlineSampleCounter { 0 };
+
+inline bool isInlineSampleName(absl::string_view name)
+{
+    return absl::StartsWith(name, "__inline_");
+}
+}
 
 Synth::Synth()
 : impl_(new Impl) // NOLINT: (paul) I don't get why clang-tidy complains here
@@ -63,6 +74,8 @@ Synth::Impl::Impl()
 {
     initializeSIMDDispatchers();
     initializeInterpolators();
+
+    inlineSamplePrefix_ = absl::StrCat("__inline_", inlineSampleCounter.fetch_add(1), "/");
 
     parser_.setListener(this);
     effectFactory_.registerStandardEffectTypes();
@@ -312,6 +325,8 @@ void Synth::Impl::clear()
     playheadMoved_ = false;
 
     initEffectBuses();
+    inlineSampleAliases_.clear();
+    inlineSamplePrefix_ = absl::StrCat("__inline_", inlineSampleCounter.fetch_add(1), "/");
 }
 
 void Synth::Impl::handleMasterOpcodes(const std::vector<Opcode>& members)
@@ -598,7 +613,17 @@ void Synth::Impl::handleSampleOpcodes(const std::vector<Opcode>& rawMembers)
 
     auto data = decodeBase64(sampleData);
     FilePool& filePool = resources_.getFilePool();
-    FileId id { std::string(name) };
+    std::string originalName(name);
+    auto [aliasIt, inserted] = inlineSampleAliases_.try_emplace(originalName, inlineSamplePrefix_ + originalName);
+    const std::string& alias = aliasIt->second;
+    if (inserted) {
+        for (const auto& layerPtr : layers_) {
+            Region& existingRegion = layerPtr->getRegion();
+            if (!existingRegion.isGenerator() && existingRegion.sampleId->filename() == originalName)
+                *existingRegion.sampleId = FileId(alias, existingRegion.sampleId->isReverse());
+        }
+    }
+    FileId id { alias };
     filePool.loadFromRam(id, std::move(data), memoryMode);
 }
 
@@ -745,9 +770,19 @@ void Synth::Impl::finalizeSfzLoad()
         absl::optional<FileInformation> fileInformation;
 
         if (!region.isGenerator()) {
-            if (!filePool.checkSampleId(*region.sampleId)) {
-                removeCurrentRegion();
-                continue;
+            const std::string originalName = region.sampleId->filename();
+            auto aliasIt = inlineSampleAliases_.find(originalName);
+            if (aliasIt != inlineSampleAliases_.end())
+                *region.sampleId = FileId(aliasIt->second, region.sampleId->isReverse());
+
+            const std::string resolvedName = region.sampleId->filename();
+            const bool isInlineSample = isInlineSampleName(resolvedName);
+
+            if (!isInlineSample) {
+                if (!filePool.checkSampleId(*region.sampleId)) {
+                    removeCurrentRegion();
+                    continue;
+                }
             }
 
             fileInformation = filePool.getFileInformation(*region.sampleId);
@@ -758,7 +793,7 @@ void Synth::Impl::finalizeSfzLoad()
 
             region.hasWavetableSample = fileInformation->wavetable.has_value();
 
-            if (fileInformation->end < config::wavetableMaxFrames) {
+            if (!isInlineSample && fileInformation->end < config::wavetableMaxFrames) {
                 auto sample = filePool.loadFile(*region.sampleId);
                 bool allZeros = true;
                 auto sampleData = sample->getData();
@@ -821,6 +856,10 @@ void Synth::Impl::finalizeSfzLoad()
             toLoad = max(toLoad, maxOffset);
         }
         else if (!region.isGenerator()) {
+            if (isInlineSampleName(region.sampleId->filename())) {
+                ++currentRegionIndex;
+                continue;
+            }
             if (!wavePool.createFileWave(filePool, std::string(region.sampleId->filename()))) {
                 removeCurrentRegion();
                 continue;
@@ -907,8 +946,11 @@ void Synth::Impl::finalizeSfzLoad()
     if (reloading)
         filePool.resetPreloadCallCounts();
 
-    for (const auto& toLoad: filesToLoad)
+    for (const auto& toLoad: filesToLoad) {
+        if (isInlineSampleName(toLoad.first.filename()))
+            continue;
         filePool.preloadFile(toLoad.first, toLoad.second);
+    }
 
     // Remove preloaded data with no linked regions
     if (reloading)

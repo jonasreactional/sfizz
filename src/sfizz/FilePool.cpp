@@ -232,7 +232,10 @@ bool sfz::FilePool::checkSample(std::string& filename) const noexcept
 
 bool sfz::FilePool::checkSampleId(FileId& fileId) const noexcept
 {
-    if (loadedFiles.contains(fileId))
+    if (loadedFiles.contains(fileId) || preloadedFiles.contains(fileId))
+        return true;
+
+    if (fileId.filename().rfind("__inline_", 0) == 0)
         return true;
 
     std::string filename = fileId.filename();
@@ -434,10 +437,9 @@ sfz::FileDataHolder sfz::FilePool::loadFromRam(const FileId& fileId, std::vector
     MemoryMode memoryMode) noexcept
 {
     const auto loaded = loadedFiles.find(fileId);
-    if (loaded != loadedFiles.end()) {
-        loaded->second.preloadCallCount++;
-        return { &loaded->second };
-    }
+    const int previousPreloadCount = (loaded != loadedFiles.end())
+        ? loaded->second.preloadCallCount + 1
+        : 1;
 
     auto reader = createAudioReaderFromMemory(data.data(), data.size(), fileId.isReverse());
     if (!reader) {
@@ -467,14 +469,14 @@ sfz::FileDataHolder sfz::FilePool::loadFromRam(const FileId& fileId, std::vector
     });
     FileData& fileData = insertedPair.first->second;
     fileData.status = FileData::Status::Preloaded;
-    fileData.preloadCallCount++;
+    fileData.fileData.reset();
+    fileData.preloadCallCount = previousPreloadCount;
     fileData.availableFrames = (memoryMode == MemoryMode::Default)
         ? frames
         : fileData.preloadedData.getNumFrames();
     fileData.memoryMode = memoryMode;
     if (memoryMode != MemoryMode::Default)
         fileData.compressedData = std::move(data);
-    fileData.streamingScheduled = false;
     DBG("Added a file " << fileId.filename());
     return { &insertedPair.first->second };
 }
@@ -483,19 +485,9 @@ sfz::FileDataHolder sfz::FilePool::getFilePromise(const std::shared_ptr<FileId>&
 {
     const auto loaded = loadedFiles.find(*fileId);
     if (loaded != loadedFiles.end()) {
-        FileData& data = loaded->second;
-        if (data.memoryMode == MemoryMode::Streaming) {
-            auto expected = FileData::Status::Preloaded;
-            if (!data.streamingScheduled.load()
-                && data.status.compare_exchange_strong(expected, FileData::Status::Streaming)) {
-                if (!scheduleInlineStreaming(fileId, data))
-                    data.status = FileData::Status::Preloaded;
-            }
-        } else {
-            if (!ensureInlineDataReady(data, fileId->isReverse()))
-                return {};
-        }
-        return { &data };
+        if (!ensureInlineDataReady(loaded->second, fileId->isReverse()))
+            return {};
+        return { &loaded->second };
     }
 
     const auto preloaded = preloadedFiles.find(*fileId);

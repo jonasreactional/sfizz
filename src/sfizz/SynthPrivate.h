@@ -15,6 +15,7 @@
 #include "modulations/sources/LFO.h"
 #include "parser/Parser.h"
 #include "parser/ParserListener.h"
+#include <absl/container/flat_hash_map.h>
 
 namespace sfz {
 
@@ -385,6 +386,8 @@ struct Synth::Impl final: public Parser::Listener {
     }
 
     bool playheadMoved_ { false };
+    std::string inlineSamplePrefix_;
+    absl::flat_hash_map<std::string, std::string> inlineSampleAliases_;
 };
 
 } // namespace sfz
