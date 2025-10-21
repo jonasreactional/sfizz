@@ -325,7 +325,8 @@ void Synth::Impl::clear()
     playheadMoved_ = false;
 
     initEffectBuses();
-    inlineSampleAliases_.clear();
+    inlineSamples_.clear();
+    inlineAliasByName_.clear();
     inlineSamplePrefix_ = absl::StrCat("__inline_", inlineSampleCounter.fetch_add(1), "/");
 }
 
@@ -611,20 +612,20 @@ void Synth::Impl::handleSampleOpcodes(const std::vector<Opcode>& rawMembers)
     if (sampleData.empty())
         return;
 
-    auto data = decodeBase64(sampleData);
-    FilePool& filePool = resources_.getFilePool();
     std::string originalName(name);
-    auto [aliasIt, inserted] = inlineSampleAliases_.try_emplace(originalName, inlineSamplePrefix_ + originalName);
-    const std::string& alias = aliasIt->second;
-    if (inserted) {
+    auto [aliasMapIt, aliasInserted] = inlineAliasByName_.try_emplace(originalName, absl::StrCat(inlineSamplePrefix_, originalName));
+    const std::string& alias = aliasMapIt->second;
+    if (aliasInserted) {
         for (const auto& layerPtr : layers_) {
             Region& existingRegion = layerPtr->getRegion();
             if (!existingRegion.isGenerator() && existingRegion.sampleId->filename() == originalName)
                 *existingRegion.sampleId = FileId(alias, existingRegion.sampleId->isReverse());
         }
     }
-    FileId id { alias };
-    filePool.loadFromRam(id, std::move(data), memoryMode);
+
+    InlineSampleEntry& entry = inlineSamples_[alias];
+    entry.data = decodeBase64(sampleData);
+    entry.mode = memoryMode;
 }
 
 void Synth::Impl::resetDefaultCCValues() noexcept
@@ -744,6 +745,14 @@ void Synth::Impl::finalizeSfzLoad()
 
     absl::flat_hash_map<sfz::FileId, int64_t> filesToLoad;
 
+    for (auto& [alias, sample] : inlineSamples_) {
+        FileId id { alias };
+        if (!sample.data.empty()) {
+            filePool.loadFromRam(id, std::move(sample.data), sample.mode);
+            sample.data.clear();
+        }
+    }
+
     auto removeCurrentRegion = [this, &currentRegionIndex, &currentRegionCount]() {
         const Region& region = layers_[currentRegionIndex]->getRegion();
         DBG("Removing the region with sample " << *region.sampleId);
@@ -770,13 +779,25 @@ void Synth::Impl::finalizeSfzLoad()
         absl::optional<FileInformation> fileInformation;
 
         if (!region.isGenerator()) {
-            const std::string originalName = region.sampleId->filename();
-            auto aliasIt = inlineSampleAliases_.find(originalName);
-            if (aliasIt != inlineSampleAliases_.end())
-                *region.sampleId = FileId(aliasIt->second, region.sampleId->isReverse());
+            std::string sampleName = region.sampleId->filename();
+            bool isInlineSample = false;
 
-            const std::string resolvedName = region.sampleId->filename();
-            const bool isInlineSample = isInlineSampleName(resolvedName);
+            auto aliasEntry = inlineSamples_.find(sampleName);
+            if (aliasEntry != inlineSamples_.end()) {
+                isInlineSample = true;
+            } else {
+                auto aliasMapIt = inlineAliasByName_.find(sampleName);
+                if (aliasMapIt != inlineAliasByName_.end()) {
+                    const std::string& alias = aliasMapIt->second;
+                    auto entryIt = inlineSamples_.find(alias);
+                    if (entryIt != inlineSamples_.end()) {
+                        *region.sampleId = FileId(alias, region.sampleId->isReverse());
+                        sampleName = alias;
+                        aliasEntry = entryIt;
+                        isInlineSample = true;
+                    }
+                }
+            }
 
             if (!isInlineSample) {
                 if (!filePool.checkSampleId(*region.sampleId)) {
@@ -852,8 +873,11 @@ void Synth::Impl::finalizeSfzLoad()
                 return Default::offsetMod.bounds.clamp(sumOffsetCC);
             }();
 
-            auto& toLoad = filesToLoad[*region.sampleId];
-            toLoad = max(toLoad, maxOffset);
+            if (!isInlineSample)
+            {
+                auto& toLoad = filesToLoad[*region.sampleId];
+                toLoad = max(toLoad, maxOffset);
+            }
         }
         else if (!region.isGenerator()) {
             if (isInlineSampleName(region.sampleId->filename())) {
