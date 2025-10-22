@@ -612,7 +612,6 @@ void Synth::Impl::handleSampleOpcodes(const std::vector<Opcode>& rawMembers)
     InlineSampleEntry& entry = inlineSamples_[canonicalName];
     entry.data = decodeBase64(sampleData);
     entry.mode = memoryMode;
-    entry.rawName = std::move(normalizedName);
 }
 
 void Synth::Impl::resetDefaultCCValues() noexcept
