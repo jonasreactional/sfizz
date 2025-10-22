@@ -731,59 +731,14 @@ void Synth::Impl::finalizeSfzLoad()
     size_t currentRegionCount = layers_.size();
 
     absl::flat_hash_map<sfz::FileId, int64_t> filesToLoad;
-    absl::flat_hash_map<std::string, std::string> inlineAliasMap;
 
     for (auto& [canonicalName, sample] : inlineSamples_) {
-        sample.alias = canonicalName;
-        FileId id { sample.alias };
+        FileId id { canonicalName };
         if (!sample.data.empty()) {
             filePool.loadFromRam(id, std::move(sample.data), sample.mode);
             sample.data.clear();
         }
-        inlineAliasMap.emplace(sample.alias, sample.alias);
-        if (!sample.rawName.empty())
-            inlineAliasMap.emplace(sample.rawName, sample.alias);
     }
-
-    auto findInlineAlias = [&](const std::string& candidate) -> const std::string* {
-        auto aliasIt = inlineAliasMap.find(candidate);
-        if (aliasIt != inlineAliasMap.end())
-            return &aliasIt->second;
-
-        InlineSampleEntry* bestEntry = nullptr;
-        size_t bestLength = 0;
-        for (auto& inlinePair : inlineSamples_) {
-            InlineSampleEntry& entry = inlinePair.second;
-            const std::string& raw = entry.rawName.empty() ? inlinePair.first : entry.rawName;
-            if (raw.empty())
-                continue;
-            if (candidate.size() < raw.size())
-                continue;
-
-            const size_t matchPos = candidate.size() - raw.size();
-            if (candidate.compare(matchPos, raw.size(), raw) != 0)
-                continue;
-
-            if (matchPos > 0) {
-                const char preceding = candidate[matchPos - 1];
-                if (preceding != '/' && preceding != '\\')
-                    continue;
-            }
-
-            if (raw.size() > bestLength) {
-                bestEntry = &entry;
-                bestLength = raw.size();
-            } else if (raw.size() == bestLength && bestEntry && entry.alias < bestEntry->alias) {
-                bestEntry = &entry;
-            }
-        }
-
-        if (!bestEntry)
-            return nullptr;
-
-        auto inserted = inlineAliasMap.emplace(candidate, bestEntry->alias);
-        return &inserted.first->second;
-    };
 
     auto removeCurrentRegion = [this, &currentRegionIndex, &currentRegionCount]() {
         const Region& region = layers_[currentRegionIndex]->getRegion();
@@ -812,13 +767,9 @@ void Synth::Impl::finalizeSfzLoad()
 
         if (!region.isGenerator()) {
             std::string sampleName = region.sampleId->filename();
-            bool isInlineSample = false;
-
-            if (const std::string* alias = findInlineAlias(sampleName)) {
-                isInlineSample = true;
-                *region.sampleId = FileId(*alias, region.sampleId->isReverse());
-                sampleName = *alias;
-            }
+            const bool isInlineSample = inlineSamples_.contains(sampleName);
+            if (isInlineSample)
+                *region.sampleId = FileId(sampleName, region.sampleId->isReverse());
 
             if (!isInlineSample) {
                 if (!filePool.checkSampleId(*region.sampleId)) {
@@ -857,7 +808,7 @@ void Synth::Impl::finalizeSfzLoad()
         }
 
         if (!region.isOscillator()) {
-            const bool isInlineRegionSample = inlineAliasMap.contains(region.sampleId->filename());
+            const bool isInlineRegionSample = inlineSamples_.contains(region.sampleId->filename());
             region.sampleEnd = min(region.sampleEnd, fileInformation->end);
 
             if (fileInformation->hasLoop) {
@@ -901,7 +852,7 @@ void Synth::Impl::finalizeSfzLoad()
             }
         }
         else if (!region.isGenerator()) {
-            if (inlineAliasMap.contains(region.sampleId->filename())) {
+            if (inlineSamples_.contains(region.sampleId->filename())) {
                 ++currentRegionIndex;
                 continue;
             }
@@ -992,7 +943,7 @@ void Synth::Impl::finalizeSfzLoad()
         filePool.resetPreloadCallCounts();
 
     for (const auto& toLoad: filesToLoad) {
-        if (inlineAliasMap.contains(toLoad.first.filename()))
+        if (inlineSamples_.contains(toLoad.first.filename()))
             continue;
         filePool.preloadFile(toLoad.first, toLoad.second);
     }

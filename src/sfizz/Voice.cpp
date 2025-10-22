@@ -478,7 +478,6 @@ bool Voice::startVoice(Layer* layer, int delay, const TriggerEvent& event) noexc
             impl.switchState(State::cleanMeUp);
             return false;
         }
-        auto& fileData = *impl.currentPromise_;
         impl.updateLoopInformation();
         impl.speedRatio_ = static_cast<float>(impl.currentPromise_->information.sampleRate / impl.sampleRate_);
         impl.sourcePosition_ = sampleOffset(region, midiState);
