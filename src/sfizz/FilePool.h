@@ -34,6 +34,7 @@
 #include "SIMDHelpers.h"
 #include "SpinMutex.h"
 #include "utility/Timing.h"
+#include "utility/Debug.h"
 #include "utility/LeakDetector.h"
 #include "utility/MemoryHelpers.h"
 #include <ghc/fs_std.hpp>
@@ -45,6 +46,15 @@
 #include <thread>
 #include <future>
 #include <memory>
+#include <vector>
+
+#ifndef SFIZZ_INLINE_LOG
+#if defined(SFIZZ_ENABLE_INLINE_LOGS)
+#define SFIZZ_INLINE_LOG(msg) DBG("[sfizz][Inline] " << msg)
+#else
+#define SFIZZ_INLINE_LOG(msg) do { } while (false)
+#endif
+#endif
 class ThreadPool;
 
 namespace sfz {
@@ -65,6 +75,12 @@ struct FileInformation {
 };
 
 // Strict C++11 disallows member initialization if aggregate initialization is to be used...
+enum class MemoryMode {
+    Default,
+    Compressed,
+    Streaming
+};
+
 struct FileData
 {
     enum class Status { Invalid, Preloaded, Streaming, Done };
@@ -77,9 +93,23 @@ struct FileData
     AudioSpan<const float> getData()
     {
         if (availableFrames > preloadedData.getNumFrames())
-            return AudioSpan<const float>(fileData).first(availableFrames);
-        else
+        {
+            auto span = AudioSpan<const float>(fileData).first(availableFrames);
+// #ifndef NDEBUG
+//             DBG("[sfizz] Returning decoded span frames=" << availableFrames.load()
+//                 << " preloaded=" << preloadedData.getNumFrames()
+//                 << " mode=" << static_cast<int>(memoryMode));
+// #endif
+            return span;
+        }
+        else {
+// #ifndef NDEBUG
+//             DBG("[sfizz] Returning preloaded chunk frames=" << preloadedData.getNumFrames()
+//                 << " available=" << availableFrames.load()
+//                 << " mode=" << static_cast<int>(memoryMode));
+// #endif
             return AudioSpan<const float>(preloadedData);
+        }
     }
 
     FileData(const FileData& other) = delete;
@@ -93,6 +123,9 @@ struct FileData
         availableFrames = other.availableFrames.load();
         lastViewerLeftAt = other.lastViewerLeftAt;
         status = other.status.load();
+        memoryMode = other.memoryMode;
+        compressedData = std::move(other.compressedData);
+        streamingScheduled.store(other.streamingScheduled.load());
     }
     FileData& operator=(FileData&& other)
     {
@@ -103,6 +136,9 @@ struct FileData
         availableFrames = other.availableFrames.load();
         lastViewerLeftAt = other.lastViewerLeftAt;
         status = other.status.load();
+        memoryMode = other.memoryMode;
+        compressedData = std::move(other.compressedData);
+        streamingScheduled.store(other.streamingScheduled.load());
         return *this;
     }
 
@@ -114,6 +150,9 @@ struct FileData
     std::atomic<size_t> availableFrames { 0 };
     std::atomic<int> readerCount { 0 };
     std::chrono::time_point<std::chrono::high_resolution_clock> lastViewerLeftAt;
+    MemoryMode memoryMode { MemoryMode::Default };
+    std::vector<char> compressedData;
+    std::atomic<bool> streamingScheduled { false };
 
     LEAK_DETECTOR(FileData);
 };
@@ -147,8 +186,24 @@ public:
         if (!data)
             return;
 
+        SFIZZ_INLINE_LOG("GC reset start sampleRate=" << data->information.sampleRate
+            << " mode=" << static_cast<int>(data->memoryMode)
+            << " readers=" << data->readerCount.load());
+
         data->readerCount -= 1;
         data->lastViewerLeftAt = highResNow();
+        if (data->readerCount == 0) {
+            if (data->memoryMode == MemoryMode::Compressed) {
+                SFIZZ_INLINE_LOG("GC dropping decoded buffer (compressed mode)");
+                data->fileData.reset();
+                data->availableFrames = data->preloadedData.getNumFrames();
+                data->status = FileData::Status::Preloaded;
+            }
+        }
+        SFIZZ_INLINE_LOG("GC reset end readerCount="
+            << data->readerCount.load()
+            << " available=" << data->availableFrames.load()
+            << " status=" << static_cast<int>(data->status.load()));
         data = nullptr;
     }
     ~FileDataHolder()
@@ -244,7 +299,8 @@ public:
      * @param data
      * @return A handle on the file data
      */
-    FileDataHolder loadFromRam(const FileId& fileId, const std::vector<char>& data) noexcept;
+    FileDataHolder loadFromRam(const FileId& fileId, std::vector<char> data,
+        MemoryMode memoryMode = MemoryMode::Default) noexcept;
 
     /**
      * @brief Check that the sample exists. If not, try to find it in a case insensitive way.
@@ -364,6 +420,8 @@ private:
     void dispatchingJob() noexcept;
     void garbageJob() noexcept;
     void loadingJob(const QueuedFileData& data) noexcept;
+    bool scheduleInlineStreaming(const std::shared_ptr<FileId>& fileId, FileData& data) noexcept;
+    void inlineStreamingJob(std::shared_ptr<FileId> fileId, FileData* data) noexcept;
     std::mutex loadingJobsMutex;
     std::vector<std::future<void>> loadingJobs;
     std::thread dispatchThread { &FilePool::dispatchingJob, this };

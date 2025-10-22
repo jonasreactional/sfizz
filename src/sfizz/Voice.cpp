@@ -478,6 +478,13 @@ bool Voice::startVoice(Layer* layer, int delay, const TriggerEvent& event) noexc
             impl.switchState(State::cleanMeUp);
             return false;
         }
+        auto& fileData = *impl.currentPromise_;
+        SFIZZ_INLINE_LOG("Voice acquired sample=" << region.sampleId->filename()
+            << " mode=" << static_cast<int>(fileData.memoryMode)
+            << " status=" << static_cast<int>(fileData.status.load())
+            << " available=" << fileData.availableFrames.load()
+            << " preload=" << fileData.preloadedData.getNumFrames()
+            << " decoded=" << fileData.fileData.getNumFrames());
         impl.updateLoopInformation();
         impl.speedRatio_ = static_cast<float>(impl.currentPromise_->information.sampleRate / impl.sampleRate_);
         impl.sourcePosition_ = sampleOffset(region, midiState);
@@ -1068,6 +1075,17 @@ void Voice::Impl::fillWithData(AudioSpan<float> buffer) noexcept
     }
 
     auto source = currentPromise_->getData();
+    if (age_ == 0) {
+        SFIZZ_INLINE_LOG("Voice first fill sample=" << region_->sampleId->filename()
+            << " sourceFrames=" << source.getNumFrames()
+            << " channels=" << source.getNumChannels()
+            << " available=" << currentPromise_->availableFrames.load());
+    }
+
+    if (source.getNumChannels() == 0 || source.getNumFrames() == 0) {
+        DBG("[Voice] Empty sample data for " << region_->sampleId->filename());
+        return;
+    }
 
     BufferPool& bufferPool = resources_.getBufferPool();
     const CurveSet& curves = resources_.getCurves();
