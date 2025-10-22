@@ -87,19 +87,9 @@ struct FileData
         if (availableFrames > preloadedData.getNumFrames())
         {
             auto span = AudioSpan<const float>(fileData).first(availableFrames);
-// #ifndef NDEBUG
-//             DBG("[sfizz] Returning decoded span frames=" << availableFrames.load()
-//                 << " preloaded=" << preloadedData.getNumFrames()
-//                 << " mode=" << static_cast<int>(memoryMode));
-// #endif
             return span;
         }
         else {
-// #ifndef NDEBUG
-//             DBG("[sfizz] Returning preloaded chunk frames=" << preloadedData.getNumFrames()
-//                 << " available=" << availableFrames.load()
-//                 << " mode=" << static_cast<int>(memoryMode));
-// #endif
             return AudioSpan<const float>(preloadedData);
         }
     }
