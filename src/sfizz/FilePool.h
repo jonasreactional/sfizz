@@ -48,13 +48,6 @@
 #include <memory>
 #include <vector>
 
-#ifndef SFIZZ_INLINE_LOG
-#if defined(SFIZZ_ENABLE_INLINE_LOGS)
-#define SFIZZ_INLINE_LOG(msg) DBG("[sfizz][Inline] " << msg)
-#else
-#define SFIZZ_INLINE_LOG(msg) do { } while (false)
-#endif
-#endif
 class ThreadPool;
 
 namespace sfz {
@@ -186,24 +179,15 @@ public:
         if (!data)
             return;
 
-        SFIZZ_INLINE_LOG("GC reset start sampleRate=" << data->information.sampleRate
-            << " mode=" << static_cast<int>(data->memoryMode)
-            << " readers=" << data->readerCount.load());
-
         data->readerCount -= 1;
         data->lastViewerLeftAt = highResNow();
         if (data->readerCount == 0) {
             if (data->memoryMode == MemoryMode::Compressed) {
-                SFIZZ_INLINE_LOG("GC dropping decoded buffer (compressed mode)");
                 data->fileData.reset();
                 data->availableFrames = data->preloadedData.getNumFrames();
                 data->status = FileData::Status::Preloaded;
             }
         }
-        SFIZZ_INLINE_LOG("GC reset end readerCount="
-            << data->readerCount.load()
-            << " available=" << data->availableFrames.load()
-            << " status=" << static_cast<int>(data->status.load()));
         data = nullptr;
     }
     ~FileDataHolder()
