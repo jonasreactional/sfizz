@@ -394,7 +394,6 @@ struct Synth::Impl final: public Parser::Listener {
         std::string alias;
         std::string rawName;
     };
-    std::string inlineSamplePrefix_;
     absl::flat_hash_map<std::string, InlineSampleEntry> inlineSamples_; // keyed by canonical sample path
 };
 

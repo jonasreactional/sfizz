@@ -32,6 +32,7 @@
 #include "Interpolators.h"
 #include "parser/Parser.h"
 #include <absl/algorithm/container.h>
+#include <absl/container/flat_hash_map.h>
 #include <absl/memory/memory.h>
 #include <absl/strings/match.h>
 #include <absl/strings/str_cat.h>
@@ -43,21 +44,11 @@
 #include <iostream>
 #include <random>
 #include <utility>
-#include <atomic>
 
 namespace sfz {
 
 // unless set to permissive, the loader rejects sfz files with errors
 static constexpr bool loaderParsesPermissively = true;
-
-namespace {
-std::atomic<uint64_t> inlineSampleCounter { 0 };
-
-inline bool isInlineSampleName(absl::string_view name)
-{
-    return absl::StartsWith(name, "__inline_");
-}
-}
 
 Synth::Synth()
 : impl_(new Impl) // NOLINT: (paul) I don't get why clang-tidy complains here
@@ -74,8 +65,6 @@ Synth::Impl::Impl()
 {
     initializeSIMDDispatchers();
     initializeInterpolators();
-
-    inlineSamplePrefix_ = absl::StrCat("__inline_", inlineSampleCounter.fetch_add(1), "/");
 
     parser_.setListener(this);
     effectFactory_.registerStandardEffectTypes();
@@ -326,7 +315,6 @@ void Synth::Impl::clear()
 
     initEffectBuses();
     inlineSamples_.clear();
-    inlineSamplePrefix_ = absl::StrCat("__inline_", inlineSampleCounter.fetch_add(1), "/");
 }
 
 void Synth::Impl::handleMasterOpcodes(const std::vector<Opcode>& members)
@@ -745,14 +733,14 @@ void Synth::Impl::finalizeSfzLoad()
     absl::flat_hash_map<sfz::FileId, int64_t> filesToLoad;
     absl::flat_hash_map<std::string, std::string> inlineAliasMap;
 
-    for (auto& [originalName, sample] : inlineSamples_) {
-        sample.alias = absl::StrCat(inlineSamplePrefix_, originalName);
+    for (auto& [canonicalName, sample] : inlineSamples_) {
+        sample.alias = canonicalName;
         FileId id { sample.alias };
         if (!sample.data.empty()) {
             filePool.loadFromRam(id, std::move(sample.data), sample.mode);
             sample.data.clear();
         }
-        inlineAliasMap.emplace(originalName, sample.alias);
+        inlineAliasMap.emplace(sample.alias, sample.alias);
         if (!sample.rawName.empty())
             inlineAliasMap.emplace(sample.rawName, sample.alias);
     }
@@ -830,8 +818,6 @@ void Synth::Impl::finalizeSfzLoad()
                 isInlineSample = true;
                 *region.sampleId = FileId(*alias, region.sampleId->isReverse());
                 sampleName = *alias;
-            } else if (isInlineSampleName(sampleName)) {
-                isInlineSample = true;
             }
 
             if (!isInlineSample) {
@@ -871,7 +857,7 @@ void Synth::Impl::finalizeSfzLoad()
         }
 
         if (!region.isOscillator()) {
-            const bool isInlineRegionSample = isInlineSampleName(region.sampleId->filename());
+            const bool isInlineRegionSample = inlineAliasMap.contains(region.sampleId->filename());
             region.sampleEnd = min(region.sampleEnd, fileInformation->end);
 
             if (fileInformation->hasLoop) {
@@ -915,7 +901,7 @@ void Synth::Impl::finalizeSfzLoad()
             }
         }
         else if (!region.isGenerator()) {
-            if (isInlineSampleName(region.sampleId->filename())) {
+            if (inlineAliasMap.contains(region.sampleId->filename())) {
                 ++currentRegionIndex;
                 continue;
             }
@@ -1006,7 +992,7 @@ void Synth::Impl::finalizeSfzLoad()
         filePool.resetPreloadCallCounts();
 
     for (const auto& toLoad: filesToLoad) {
-        if (isInlineSampleName(toLoad.first.filename()))
+        if (inlineAliasMap.contains(toLoad.first.filename()))
             continue;
         filePool.preloadFile(toLoad.first, toLoad.second);
     }

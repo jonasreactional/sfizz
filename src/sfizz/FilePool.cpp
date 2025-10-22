@@ -235,9 +235,6 @@ bool sfz::FilePool::checkSampleId(FileId& fileId) const noexcept
     if (loadedFiles.contains(fileId) || preloadedFiles.contains(fileId))
         return true;
 
-    if (fileId.filename().rfind("__inline_", 0) == 0)
-        return true;
-
     std::string filename = fileId.filename();
     bool result = checkSample(filename);
     if (result)
@@ -491,11 +488,10 @@ sfz::FileDataHolder sfz::FilePool::loadFromRam(const FileId& fileId, std::vector
 
 sfz::FileDataHolder sfz::FilePool::getFilePromise(const std::shared_ptr<FileId>& fileId) noexcept
 {
-    const bool isInline = absl::StartsWith(fileId->filename(), "__inline_");
-
     const auto loaded = loadedFiles.find(*fileId);
     if (loaded != loadedFiles.end()) {
         FileData& data = loaded->second;
+        const bool isInline = !data.compressedData.empty();
         if (isInline && data.memoryMode == MemoryMode::Default) {
             SFIZZ_INLINE_LOG("[WARN] Inline sample " << fileId->filename()
                 << " was stored in Default mode. Running synchronous decode.");
@@ -527,6 +523,7 @@ sfz::FileDataHolder sfz::FilePool::getFilePromise(const std::shared_ptr<FileId>&
         return {};
     }
     FileData& data = preloaded->second;
+    const bool isInline = !data.compressedData.empty();
     if (data.memoryMode != MemoryMode::Default) {
         if (data.status == FileData::Status::Preloaded && !data.streamingScheduled.load()) {
             if (!scheduleInlineStreaming(fileId, data)) {
