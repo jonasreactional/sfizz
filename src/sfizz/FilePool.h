@@ -70,7 +70,6 @@ struct FileInformation {
 // Strict C++11 disallows member initialization if aggregate initialization is to be used...
 enum class MemoryMode {
     Default,
-    Compressed,
     Streaming
 };
 
@@ -181,13 +180,7 @@ public:
 
         data->readerCount -= 1;
         data->lastViewerLeftAt = highResNow();
-        if (data->readerCount == 0) {
-            if (data->memoryMode == MemoryMode::Compressed) {
-                data->fileData.reset();
-                data->availableFrames = data->preloadedData.getNumFrames();
-                data->status = FileData::Status::Preloaded;
-            }
-        }
+        // Streaming mode keeps decoded data until garbage collection.
         data = nullptr;
     }
     ~FileDataHolder()

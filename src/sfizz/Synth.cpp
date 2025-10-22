@@ -577,8 +577,8 @@ void Synth::Impl::handleSampleOpcodes(const std::vector<Opcode>& rawMembers)
             hasData = true;
             break;
         case hash("memorymode"):
-            if (absl::EqualsIgnoreCase(opcode.value, "compressed"))
-                memoryMode = MemoryMode::Compressed;
+            if (absl::EqualsIgnoreCase(opcode.value, "default"))
+                memoryMode = MemoryMode::Default;
             else if (absl::EqualsIgnoreCase(opcode.value, "streaming"))
                 memoryMode = MemoryMode::Streaming;
             break;
@@ -611,7 +611,7 @@ void Synth::Impl::handleSampleOpcodes(const std::vector<Opcode>& rawMembers)
 
     InlineSampleEntry& entry = inlineSamples_[canonicalName];
     entry.data = decodeBase64(sampleData);
-    entry.mode = MemoryMode::Streaming;
+    entry.mode = memoryMode;
     entry.rawName = std::move(normalizedName);
 }
 
